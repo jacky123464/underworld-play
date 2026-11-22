@@ -10547,10 +10547,15 @@ UW.define('worlds/underworld/content/scenes', [], function () {
         // 六道門：搖還魂鈴找回家的門；按輪迴石確認往前的門
         { id: 'doors', label: '六道門', onTap: [say('每一道門後都有風吹出來，有的暖，有的冷。')],
           uses: {
-            'relic-23': [when({ flag: 'gave-name' }, [dlg('lunhui-bell-noname')], [dlg('lunhui-bell'), flag('way-home')])],
+            // again：舊版會先記「用過」才播對話，中途重新整理的存檔會卡在「已經用過了」。
+            // 這兩件決定結局，第二次以後照樣有效（還沒找到門就再搖一次；燈芯每次都重新回答並判定結局）。
+            'relic-23': { effects: [when({ flag: 'gave-name' }, [dlg('lunhui-bell-noname')], [dlg('lunhui-bell'), flag('way-home')])],
+                          again: [when({ flag: 'way-home' }, [say('鈴聲停了。回家的那道門，你已經認得了。')],
+                            [when({ flag: 'gave-name' }, [dlg('lunhui-bell-noname')], [dlg('lunhui-bell'), flag('way-home')])])] },
             'relic-21': [dlg('lunhui-hand')],
             // 最後一盞魂燈的燈芯：帶到門前，回答「想往哪裡去」，再判定結局
-            'relic-22': [dlg('lunhui-last-lamp'), { do: 'evaluateEnding' }]
+            'relic-22': { effects: [dlg('lunhui-last-lamp'), { do: 'evaluateEnding' }],
+                          again: [dlg('lunhui-last-lamp'), { do: 'evaluateEnding' }] }
           } },
         { id: 'tablet', label: '門前石碑', onTap: [relic('relic-21')], onRepeat: [say('碑上的手印裡，有一個和你的一樣大。')] },
         // 最後一盞魂燈：先道別、拿到燈芯；把燈芯帶到六道門前（使用文物）才回答「想往哪裡去」
