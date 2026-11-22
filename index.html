@@ -5464,10 +5464,12 @@ UW.define('systems/hotspot', [
       }
       var fk = usedFlag(sceneId, h.id, relicId);
       var again = !!(store.get().run && store.get().run.flags[fk]);
-      if (!again) store.dispatch({ type: 'flag/set', key: fk, value: true });
       var effects = Array.isArray(u) ? u : u.effects;
       if (again) effects = (!Array.isArray(u) && u.again) || [{ do: 'say', text: S.t('use.again', { relic: relic ? relic.name : relicId }) }];
       await actions.run(effects, ctx);
+      // 效果全部跑完才記「用過」：對話／選項／結局判定進行到一半就重新整理時，旗標不會先存進去，
+      // 回來再用一次會重播完整效果（例：輪迴門燈芯 → 回答想往哪裡去 → evaluateEnding），不會卡在「已經用過了」。
+      if (!again) store.dispatch({ type: 'flag/set', key: fk, value: true });
     } finally {
       busy = false;
     }
