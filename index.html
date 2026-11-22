@@ -1702,10 +1702,19 @@ UW.define('art/gpu3d', ['systems/motion', 'art/mesh'], function (motion, M) {
   // ---------------- 裝置與管線（整個遊戲共用一份） ----------------
   var shared = null;
 
-  /** 網址加 ?no3d（測試用）＝假裝不支援 WebGPU，整個遊戲走 2D 備援。 */
+  /** 瀏覽器本身有沒有 WebGPU（不管設定）；設定畫面用來說明「這台裝置不支援 3D」。 */
+  function available() { return typeof navigator !== 'undefined' && !!navigator.gpu; }
+  /**
+   * 這次要不要用 3D：網址加 ?no3d（測試用），或設定「畫面」選 2D（meta.settings.view＝'2d'）＝整個遊戲走 2D。
+   * 設定在呼叫時才讀（core/state 延遲取用，模組定義當下不碰狀態）。
+   */
   function supported() {
     if (typeof location !== 'undefined' && /[?&]no3d\b/.test(location.search)) return false;
-    return typeof navigator !== 'undefined' && !!navigator.gpu;
+    if (UW.has('core/state')) {
+      var st = UW.require('core/state').get().meta.settings;
+      if (st && st.view === '2d') return false;
+    }
+    return available();
   }
 
   function setup() {
@@ -2109,7 +2118,7 @@ UW.define('art/gpu3d', ['systems/motion', 'art/mesh'], function (motion, M) {
   }
 
   return {
-    supported: supported, viewer: viewer, snapshot: snapshot,
+    supported: supported, available: available, viewer: viewer, snapshot: snapshot,
     setup: setup, target: target, mesh: mesh, binding: binding, particles: particles, surfaces: surfaces,
     uniforms: uniforms, camera: camera, draw: draw, project: project, shadowFit: shadowFit,
     U: { P: U_P, MODEL: U_MODEL, CAM: U_CAM, RIGHT: U_RIGHT, UP: U_UP, FWD: U_FWD, FOG: U_FOG, KEY: U_KEY, KEYC: U_KEYC, LP: U_LP, LC: U_LC, SKY: U_SKY, EX: U_EX, SM: U_SM, EX2: U_EX2, EX3: U_EX3, HC: U_HC },
@@ -3746,6 +3755,11 @@ UW.define('content/strings', [], function () {
     'settings.motion.reduced': '減弱',
     'settings.motion.off': '關閉',
     'settings.sound': '音效',
+    'settings.view': '畫面',
+    'settings.view.auto': '3D',
+    'settings.view.2d': '2D',
+    'settings.view.hint': '2D 比較省電，舊手機或發燙時可以改用 2D；切換後立刻生效。',
+    'settings.view.unsupported': '這個瀏覽器不支援 3D（WebGPU），目前一律是 2D。',
     'settings.quality': '畫質',
     'settings.quality.auto': '自動',
     'settings.quality.low': '低',
@@ -4097,6 +4111,11 @@ UW.define('core/save', ['core/state', 'core/events', 'systems/preview'], functio
     if (d.meta) { d.meta.settings = d.meta.settings || {}; d.meta.settings.sound = true; }
     d.version = 5; return d;
   };
+  // v5 → v6：設定多了畫面模式 view（'auto'＝支援就用 3D、'2d'＝一律 2D；2026-11-22 使用者要求）
+  migrations[5] = function (d) {
+    if (d.meta) { d.meta.settings = d.meta.settings || {}; if (!d.meta.settings.view) d.meta.settings.view = 'auto'; }
+    d.version = 6; return d;
+  };
   var timer = null;
 
   function storage() {
@@ -4234,14 +4253,14 @@ UW.define('core/save', ['core/state', 'core/events', 'systems/preview'], functio
 UW.define('core/state', ['core/events'], function (events) {
   'use strict';
 
-  var SAVE_VERSION = 5;               // 2：settings 新增 lookSens（滑鼠靈敏度）；3：lookSens 重新定基準（新 1 倍＝舊 0.2 倍）；4：settings 新增 quality（畫質）；5：音效預設改為開啟（舊存檔一次性打開）
+  var SAVE_VERSION = 6;               // 2：settings 新增 lookSens（滑鼠靈敏度）；3：lookSens 重新定基準（新 1 倍＝舊 0.2 倍）；4：settings 新增 quality（畫質）；5：音效預設改為開啟（舊存檔一次性打開）；6：settings 新增 view（畫面 3D／2D）
 
   function initialMeta() {
     return {
       endingsSeen: [],
       titles: [],
       codexGold: false,
-      settings: { motion: 'auto', sound: true, volume: 0.5, lookSens: 1, quality: 'auto' }
+      settings: { motion: 'auto', sound: true, volume: 0.5, lookSens: 1, quality: 'auto', view: 'auto' }
     };
   }
 
@@ -6454,11 +6473,24 @@ UW.define('ui/screens/explore', [
           nextBtn)
       ));
 
-      var view = renderer.create(stage, sceneId, art, {
-        free: walking,
-        canMove: function () { return router.current().overlays.length === 0; },  // 對話、謎題打開時不走動
-        onFire: fire                                                               // 滑鼠鎖定時按左鍵
-      });
+      function makeView() {
+        return renderer.create(stage, sceneId, art, {
+          free: walking,
+          canMove: function () { return router.current().overlays.length === 0; },  // 對話、謎題打開時不走動
+          onFire: fire                                                               // 滑鼠鎖定時按左鍵
+        });
+      }
+      var view = makeView();
+      var viewMode = store.get().meta.settings.view || 'auto';
+      /** 設定的「畫面」3D／2D 改了：當場換掉畫布（不必重進場景），疊在畫布上的元件重新排到最上面。 */
+      function rebuildView() {
+        viewMode = store.get().meta.settings.view || 'auto';
+        view.destroy();
+        view = makeView();
+        [spots, walkBtn, crosshair, lockPrompt, heldBar, usablePanel].forEach(function (n) { stage.appendChild(n); });
+        view.onChange(function () { place(); refreshWalk(); });
+        place(); refreshWalk();
+      }
       stage.appendChild(spots);                       // 確保熱點在畫布之上
       var walkBtn = h('button.walk-toggle', { onclick: toggleWalk, hidden: true });
       stage.appendChild(walkBtn);
@@ -6599,7 +6631,10 @@ UW.define('ui/screens/explore', [
       refreshUsable();
 
       return {
-        onState: function () { refreshSpots(); refreshBars(); refreshWalk(); refreshUsable(); },
+        onState: function () {
+          if ((store.get().meta.settings.view || 'auto') !== viewMode) rebuildView();
+          refreshSpots(); refreshBars(); refreshWalk(); refreshUsable();
+        },
         unmount: function () { view.destroy(); offHeld(); window.removeEventListener('keydown', onKey); if (inv.destroy) inv.destroy(); }
       };
     }
@@ -7106,8 +7141,8 @@ UW.define('ui/screens/puzzle', [
  * 滑鼠靈敏度（settings.lookSens，倍率 0.25～5；存檔 v3 起 1 倍＝舊版的 0.2 倍）：拖曳滑桿時直接寫入設定，但不重繪畫面（重繪會打斷拖曳）。
  */
 UW.define('ui/screens/settings', [
-  'ui/dom', 'core/state', 'core/router', 'core/strings', 'ui/components/panel', 'systems/game', 'systems/quality', 'systems/preview'
-], function (dom, store, router, S, panel, game, quality, preview) {
+  'ui/dom', 'core/state', 'core/router', 'core/strings', 'ui/components/panel', 'systems/game', 'systems/quality', 'systems/preview', 'art/gpu3d'
+], function (dom, store, router, S, panel, game, quality, preview, gpu3d) {
   'use strict';
   var h = dom.h;
   var MOTION = ['auto', 'full', 'reduced', 'off'];
@@ -7161,6 +7196,16 @@ UW.define('ui/screens/settings', [
                 'aria-pressed': st.sound ? 'true' : 'false',
                 onclick: function () { set('sound', !st.sound); }
               }, st.sound ? S.t('settings.on') : S.t('settings.off'))),
+            h('fieldset.setting',                                              // 畫面 3D／2D（2026-11-22）
+              h('legend', S.t('settings.view')),
+              h('div.segmented', ['auto', '2d'].map(function (v) {
+                var on = (st.view || 'auto') === v;
+                return h('button.seg' + (on ? '.is-on' : ''), {
+                  'aria-pressed': on ? 'true' : 'false',
+                  onclick: function () { set('view', v); }
+                }, S.t('settings.view.' + v));
+              })),
+              h('p.setting-hint', S.t(gpu3d.available() ? 'settings.view.hint' : 'settings.view.unsupported'))),
             h('fieldset.setting',
               h('legend', S.t('settings.quality')),
               h('p.setting-hint', S.t('settings.quality.hint')),
